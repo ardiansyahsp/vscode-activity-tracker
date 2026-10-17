@@ -1,4 +1,4 @@
-import 'dotenv/config'; // <-- Membaca file .env secara otomatis
+import 'dotenv/config'; 
 import fs from 'fs';
 import path from 'path';
 import { createClient } from '@supabase/supabase-js';
@@ -8,17 +8,14 @@ import util from 'util';
 const execPromise = util.promisify(exec);
 
 // --- KONFIGURASI SUPABASE ---
-// Mengambil URL dan API Key dari file .env untuk keamanan
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Lokasi penyimpanan file
 const DATA_FILE = path.join(process.cwd(), 'coding_data.json');
 const PS1_FILE = path.join(process.cwd(), 'get-window.ps1');
 
 // --- FUNGSI ZONA WAKTU LOKAL ---
-// Fungsi untuk mengambil tanggal (YYYY-MM-DD) berdasarkan zona waktu lokal komputer (WIB)
 function getLocalDateString(d) {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -27,7 +24,6 @@ function getLocalDateString(d) {
 }
 
 // --- MAGIC TRICK: MEMBUAT DETEKTOR NATIVE WINDOWS 11 ---
-// Kita menulis skrip PowerShell kecil secara otomatis untuk membaca layar
 const psScript = `
 Add-Type -TypeDefinition '
 using System;
@@ -45,21 +41,17 @@ $title = New-Object System.Text.StringBuilder 256
 [Win32]::GetWindowText($hwnd, $title, 256) | Out-Null
 Write-Output "$($p.Name)|||$($title.ToString())"
 `;
-// Simpan skrip PowerShell ke dalam folder
 fs.writeFileSync(PS1_FILE, psScript);
 
-// Fungsi membaca data JSON lokal
 function loadData() {
   if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   return {};
 }
 
-// Fungsi menyimpan data JSON lokal
 function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// Fungsi menjalankan PowerShell dari dalam Node.js
 async function getActiveWindow() {
   try {
     const { stdout } = await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -File "${PS1_FILE}"`);
@@ -71,6 +63,43 @@ async function getActiveWindow() {
   return null;
 }
 
+// --- KECERDASAN BARU: DETEKSI BAHASA & KATEGORI ---
+function detectLanguage(title) {
+  const t = title.toLowerCase();
+  if (t.includes('.tsx') || t.includes('.ts')) return 'TypeScript/React';
+  if (t.includes('.jsx') || t.includes('.js')) return 'JavaScript';
+  if (t.includes('.php')) return 'PHP/Laravel';
+  if (t.includes('.css') || t.includes('tailwind')) return 'CSS/Tailwind';
+  if (t.includes('.html')) return 'HTML';
+  if (t.includes('.json')) return 'JSON';
+  return 'Mixed/Other';
+}
+
+function analyzeActivity(owner, title) {
+  // 1. CODING (VS Code)
+  if (owner.includes('Code') || title.includes('Visual Studio Code')) {
+    const parts = title.split(' - ');
+    const project = parts.length >= 2 ? parts[parts.length - 2] : 'Proyek Tidak Diketahui';
+    return { isTracked: true, category: 'Coding', project: project, lang: detectLanguage(title) };
+  }
+  // 2. DESIGNING (Figma)
+  if (title.includes('Figma')) {
+    const parts = title.split(' – '); // Figma kadang pakai en-dash
+    const project = parts.length > 0 ? parts[0].replace('Figma', '').trim() : 'UI/UX Design';
+    return { isTracked: true, category: 'Designing', project: project || 'UI Mockup', lang: 'Design Tools' };
+  }
+  // 3. TESTING (Localhost)
+  if (title.includes('localhost') || title.includes('127.0.0.1')) {
+    return { isTracked: true, category: 'Testing', project: 'Local Environment', lang: 'Web Preview' };
+  }
+  // 4. RESEARCHING (Stack Overflow / GitHub)
+  if (title.includes('Stack Overflow') || title.includes('GitHub')) {
+    return { isTracked: true, category: 'Researching', project: 'Documentation & Bugs', lang: 'Reading' };
+  }
+  
+  return { isTracked: false };
+}
+
 // ==============================================
 // LOGIKA UTAMA TRACKER
 // ==============================================
@@ -78,7 +107,7 @@ async function getActiveWindow() {
 let codingData = loadData();
 let syncCounter = 0;
 
-console.log("🚀 Coding Time Tracker (Mode Native Windows) Aktif!");
+console.log("🚀 Advanced Time Tracker (Mode Native Windows) Aktif!");
 console.log("Menghubungkan ke Supabase...\n");
 
 setInterval(async () => {
@@ -86,29 +115,37 @@ setInterval(async () => {
     const window = await getActiveWindow();
     if (!window || !window.title) return;
 
-    // Cek apakah jendela aktif adalah VS Code
-    if (window.owner.name.includes('Code') || window.title.includes('Visual Studio Code')) {
-      const titleParts = window.title.split(' - ');
-      const projectName = titleParts.length >= 2 ? titleParts[titleParts.length - 2] : 'Proyek Tidak Diketahui';
-      
-      // Menggunakan fungsi format lokal agar aktivitas subuh masuk ke hari yang benar
+    const activity = analyzeActivity(window.owner.name, window.title);
+
+    if (activity.isTracked) {
       const today = getLocalDateString(new Date());
 
       if (!codingData[today]) codingData[today] = {};
-      if (!codingData[today][projectName]) codingData[today][projectName] = 0;
+      
+      // Penyesuaian struktur JSON lokal agar mendukung multi-data
+      if (!codingData[today][activity.project] || typeof codingData[today][activity.project] === 'number') {
+        // Jika data lama masih berupa angka biasa, kita ubah jadi object
+        const oldDuration = typeof codingData[today][activity.project] === 'number' ? codingData[today][activity.project] : 0;
+        codingData[today][activity.project] = { duration: oldDuration, category: activity.category, lang: activity.lang };
+      }
 
-      // Tambah 5 detik
-      codingData[today][projectName] += 5;
+      // Tambah 5 detik & update bahasa/kategori terbaru
+      codingData[today][activity.project].duration += 5;
+      codingData[today][activity.project].category = activity.category;
+      codingData[today][activity.project].lang = activity.lang;
+      
       saveData(codingData); 
 
-      const totalSeconds = codingData[today][projectName];
+      const totalSeconds = codingData[today][activity.project].duration;
       const minutes = Math.floor(totalSeconds / 60);
       const seconds = totalSeconds % 60;
       
       console.clear();
-      console.log(`🚀 Coding Time Tracker (Mode Native) Aktif!\n`);
-      console.log(`💻 Proyek Aktif : ${projectName}`);
-      console.log(`⏱️  Waktu Hari Ini: ${minutes} menit ${seconds} detik`);
+      console.log(`🚀 Advanced Time Tracker Aktif!\n`);
+      console.log(`📂 Kategori   : ${activity.category}`);
+      console.log(`💻 Proyek     : ${activity.project}`);
+      console.log(`🛠️  Tech/Lang  : ${activity.lang}`);
+      console.log(`⏱️  Waktu      : ${minutes} menit ${seconds} detik`);
 
       // Sinkronisasi ke Supabase tiap 30 detik
       syncCounter += 5;
@@ -120,8 +157,10 @@ setInterval(async () => {
           .from('coding_activity')
           .upsert({ 
             date: today, 
-            project_name: projectName, 
-            duration_seconds: totalSeconds 
+            project_name: activity.project, 
+            duration_seconds: totalSeconds,
+            category: activity.category,
+            language: activity.lang
           }, { 
             onConflict: 'date, project_name' 
           });
@@ -134,7 +173,7 @@ setInterval(async () => {
       }
     } else {
       console.clear();
-      console.log(`🚀 Coding Time Tracker (Mode Native) Aktif!\n`);
+      console.log(`🚀 Advanced Time Tracker Aktif!\n`);
       console.log(`💤 Sedang Idle/Membuka: ${window.title.substring(0, 45)}...`);
       console.log(`(Perhitungan waktu dihentikan sementara)`);
     }
